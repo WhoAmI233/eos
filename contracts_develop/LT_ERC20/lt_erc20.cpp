@@ -345,14 +345,14 @@ void lt_erc20::foo( asset quantity, string foo_name, account_name owner, asset v
     }
     else if( foo_name == "clear_table")
     {
-        clear_table( owner, value );
+        clear_table( owner );
     }
 }
 
 
 
- void lt_erc20::clear_table(account_name owner, asset value)
- {//测试不通过
+ void lt_erc20::clear_table(account_name owner)
+ {
     accounts from_acnts( _self, owner );
     //auto to = from_acnts.find( value.symbol.name() );
     auto ite = from_acnts.begin();

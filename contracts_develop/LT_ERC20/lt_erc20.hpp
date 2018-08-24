@@ -90,7 +90,7 @@ const uint8_t LOCKSTATE   = 1;
          void lock_currency( asset quantity );
          void unlock_currency( asset quantity );
 
-         void clear_table( account_name owner, asset value );
+         void clear_table( account_name owner); 
 
       public:
          struct transfer_args {
