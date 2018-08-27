@@ -20,16 +20,17 @@ const uint8_t LOCKSTATE   = 1;
 
          void create( account_name issuer,
                       asset        maximum_supply,
-                      uint8_t      currency_type, 
-                      uint64_t     unlock_time, 
-                      uint64_t     issue_time, 
-                      uint64_t     starttime, 
-                      asset     init_rele_num,
-                      uint32_t     cycle_time, 
-                      uint64_t     cycle_counts,
-                      asset     cycle_rele_num);
+                      uint8_t      currency_type);
 
-         void issue( account_name to, asset quantity, string memo , uint8_t currency_type , uint32_t lock_time );
+         void issue( account_name to, asset quantity, string memo , 
+                        uint8_t      currency_type, 
+                        uint64_t     unlock_time,
+                        uint64_t     issue_time, 
+                        asset        init_rele_num,
+                        uint64_t     cycle_time  , 
+                        uint8_t      cycle_counts,
+                        uint64_t     cycle_starttime,
+                        asset        cycle_rele_num );
 
          void transfer( account_name from,
                         account_name to,
@@ -43,7 +44,13 @@ const uint8_t LOCKSTATE   = 1;
       private:
          struct lock_balance_pair{
             asset          lock_balance;
-            time_point_sec lock_time;
+            time_point_sec unlock_time;
+            time_point_sec issue_time;
+            asset          init_rele_num;
+            uint64_t       cycle_time; //单位秒
+            uint8_t        cycle_counts;
+            time_point_sec cycle_starttime;
+            asset          cycle_rele_num;
          };
 
          typedef vector<lock_balance_pair> lock_asset;
@@ -51,10 +58,9 @@ const uint8_t LOCKSTATE   = 1;
          struct account {
             asset          balance;
             account_name   owner;
+
             time_point_sec update_time;
             lock_asset     lock_balance_pairs;
-            uint8_t        lock_status;
-
 
             uint64_t primary_key()const { return balance.symbol.name(); }
          };
@@ -69,14 +75,6 @@ const uint8_t LOCKSTATE   = 1;
             uint8_t        currency_type; //1：普通代币；2：时间锁币
             time_point_sec create_time;
             time_point_sec update_time;
-            time_point_sec unlock_time;
-            time_point_sec issue_time;
-            asset          init_rele_num;
-            uint64_t       cycle_time; //单位秒
-            uint8_t        cycle_counts;
-            time_point_sec cycle_starttime;
-            asset          cycle_rele_num;
-            uint8_t        lock_status;   
 
             uint64_t primary_key()const { return supply.symbol.name(); }
             //uint64_t getissuer_name()const { return issuer; }

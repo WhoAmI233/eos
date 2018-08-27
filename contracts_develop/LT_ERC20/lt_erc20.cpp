@@ -3,17 +3,9 @@
 
 void lt_erc20::create( account_name issuer,
                        asset        maximum_supply,
-                       uint8_t      currency_type, 
-                       uint64_t     unlock_time, 
-                       uint64_t     issue_time, 
-                       uint64_t     starttime, 
-                       asset        init_rele_num,
-                       uint32_t     cycle_time  , 
-                       uint64_t     cycle_counts,
-                       asset        cycle_rele_num)
+                       uint8_t      currency_type)
 {
     require_auth( _self );
-    //eosio_assert( false, "test" );
     auto sym = maximum_supply.symbol;
     eosio_assert( sym.is_valid(), "invalid symbol name" );
     eosio_assert( maximum_supply.is_valid(), "invalid supply");
@@ -24,55 +16,26 @@ void lt_erc20::create( account_name issuer,
     auto existing = statstable.find( sym.name() );
     eosio_assert( existing == statstable.end(), "token with symbol already exists" );
     
-    //uint8_t check_cycle = (maximum_supply.amount - init_rele_num)/cycle_counts;
-    //eosio_assert( check_cycle == cycle_rele_num, "Incorrect cycle parameters." );
-
-    if( 1 == currency_type ) //普通代币
-    {
-        statstable.emplace( _self, [&]( auto& s ) {
-        s.supply.symbol = maximum_supply.symbol;
-        s.max_supply    = maximum_supply;
-        s.issuer        = issuer;
-        s.currency_type = currency_type;
-        s.create_time   = time_point_sec(now());
-        s.update_time   = time_point_sec(now());
-        s.unlock_time   = time_point_sec(now());
-        s.issue_time    = time_point_sec(now());
-        s.init_rele_num = maximum_supply - maximum_supply;
-        s.cycle_time    = 0;
-        s.cycle_counts    = 0;
-        s.cycle_starttime = time_point_sec(now());
-        s.cycle_rele_num  = maximum_supply - maximum_supply;
-        s.lock_status     = UNLOCKSTATE;
-        });
-    }
-    else if( 2 == currency_type ) //时间锁币
-    {
-        statstable.emplace( _self, [&]( auto& s ) {
-        s.supply.symbol = maximum_supply.symbol;
-        s.max_supply    = maximum_supply;
-        s.issuer        = issuer;
-        s.currency_type = currency_type;
-        s.create_time   = time_point_sec(now());
-        s.update_time   = time_point_sec(now());
-        s.unlock_time   = time_point_sec(now()) + unlock_time;
-        s.issue_time    = time_point_sec(now()) + issue_time;
-        s.init_rele_num = init_rele_num;
-        s.cycle_time    = cycle_time  ;
-        s.cycle_counts    = cycle_counts;
-        s.cycle_starttime = time_point_sec(now()) + starttime;
-        s.cycle_rele_num  = cycle_rele_num;
-        s.lock_status     = LOCKSTATE;
-        });   
-    }
-    else
-    {
-        eosio_assert( false, "param currency_type:error,please check." );
-    }
+    statstable.emplace( _self, [&]( auto& s ) {
+    s.supply.symbol = maximum_supply.symbol;
+    s.max_supply    = maximum_supply;
+    s.issuer        = issuer;
+    s.currency_type = currency_type;
+    s.create_time   = time_point_sec(now());
+    s.update_time   = time_point_sec(now());
+    });
 }
 
 
-void lt_erc20::issue( account_name to, asset quantity, string memo, uint8_t currency_type, uint32_t lock_time )
+void lt_erc20::issue( account_name to, asset quantity, string memo, 
+                        uint8_t      currency_type, 
+                        uint64_t     unlock_time,
+                        uint64_t     issue_time, 
+                        asset        init_rele_num,
+                        uint64_t     cycle_time  , 
+                        uint8_t      cycle_counts,
+                        uint64_t     cycle_starttime,
+                        asset        cycle_rele_num )
 {
     auto sym = quantity.symbol;
     eosio_assert( sym.is_valid(), "invalid symbol name" );
@@ -95,10 +58,8 @@ void lt_erc20::issue( account_name to, asset quantity, string memo, uint8_t curr
     eosio_assert( quantity.amount <= st.max_supply.amount - st.supply.amount, "quantity exceeds available supply");
 
     eosio_assert( currency_type == st.currency_type, "currency_type mismatch");
-
-    eosio_assert( st.unlock_time < time_point_sec(now()), "Not available until unlock time");
-
-
+    eosio_assert( unlock_time < cycle_starttime, "The unlocking time is not the same as the start time of the cycle");
+    
     if( 1 == currency_type ) //普通代币
     {
         statstable.modify( st, 0, [&]( auto& s ) {
@@ -113,26 +74,15 @@ void lt_erc20::issue( account_name to, asset quantity, string memo, uint8_t curr
     }
     else if( 2 == currency_type ) //带时间锁
     {
-        if(st.create_time == st.update_time)
-        {
-            quantity = st.init_rele_num;
-        }
-        else
-        {
-            quantity = st.cycle_rele_num;
-        }
         statstable.modify( st, 0, [&]( auto& s ) {
         s.supply      += quantity;
         s.update_time = time_point_sec(now());
-        s.cycle_counts--;
-        s.unlock_time = time_point_sec(now()) + s.cycle_time;
         });
 
         add_balance( st.issuer, quantity, st.issuer );
         accounts from_acnts( _self, st.issuer );
         const auto& from = from_acnts.get( sym_name, "no balance object found" );
         eosio_assert( from.balance.amount >= quantity.amount, "overdrawn balance" );
-
 
         if( from.balance.amount == quantity.amount ) {
             from_acnts.erase( from );
@@ -142,23 +92,39 @@ void lt_erc20::issue( account_name to, asset quantity, string memo, uint8_t curr
                 a.update_time = time_point_sec(now());
             });
         }
-
         
         if( acc == acctable.end() ) {
             acctable.emplace( st.issuer, [&]( auto& a ){
-                a.balance     = quantity - quantity;
+                a.balance     = init_rele_num;
                 a.owner       = to;
-                a.lock_status = 1;
                 a.update_time = time_point_sec(now());
-                a.lock_balance_pairs.push_back(lock_balance_pair {quantity, time_point_sec(now()) + lock_time} );
+                a.lock_balance_pairs.push_back(lock_balance_pair {
+                    quantity - init_rele_num, 
+                    time_point_sec(now()) + unlock_time,
+                    time_point_sec(now()) + issue_time,
+                    init_rele_num,
+                    cycle_time,
+                    cycle_counts,
+                    time_point_sec(now()) + cycle_starttime,
+                    cycle_rele_num                            
+                    } );
             });
         } 
         else 
         {
             acctable.modify( acc, 0, [&]( auto& a ) {
-                a.lock_status = 1;
+                a.balance     += init_rele_num;
                 a.update_time = time_point_sec(now());
-                a.lock_balance_pairs.push_back(lock_balance_pair {quantity, time_point_sec(now()) + lock_time} );
+                a.lock_balance_pairs.push_back(lock_balance_pair {
+                    quantity- init_rele_num, 
+                    time_point_sec(now()) + unlock_time,
+                    time_point_sec(now()) + issue_time,
+                    init_rele_num,
+                    cycle_time,
+                    cycle_counts,
+                    time_point_sec(now()) + cycle_starttime,
+                    cycle_rele_num                               
+                    } );
             });
         }
 
@@ -185,9 +151,6 @@ void lt_erc20::transfer( account_name from,
     eosio_assert( is_account( to ), "to account does not exist");
     auto sym = quantity.symbol.name();
     stats statstable( _self, sym );
-    //auto existing = statstable.find( sym );
-    //eosio_assert( existing != statstable.end(), "token with symbol does not exist, create token before issue" );
-    //const auto& st = *existing;
     const auto& st = statstable.get( sym );
 
     require_recipient( from );
@@ -208,38 +171,64 @@ void lt_erc20::transfer( account_name from,
     {
         accounts from_acnts( _self, from );
         const auto& ac = from_acnts.get( quantity.symbol.name(), "no balance object found 2" );
-        //accounts from_acnts( _self, from );
-        //auto ac = from_acnts.find( quantity.symbol.name() );
-
-        if( 0 == ac.lock_status )
+    
+        from_acnts.modify( ac, 0, [&]( auto& s ) {
+        //int rele_times = s.lock_balance_pairs.lock_balance.amount
+        //lock_asset::iterator iter;
+        lock_asset::iterator   iter = s.lock_balance_pairs.begin();
+        //advance(iter, distance<lock_asset::const_iterator>(iter, it));
+        for(; iter != s.lock_balance_pairs.end(); )//此处进行周期性释放限制
         {
-            sub_balance( from, quantity );
-            add_balance( to, quantity, from );
-        }
-        else if ( 1 == ac.lock_status )
-        {
-            from_acnts.modify( ac, 0, [&]( auto& s ) {
-            //lock_asset::iterator iter;
-            lock_asset::const_iterator   iter = s.lock_balance_pairs.begin();
-            //advance(iter, distance<lock_asset::const_iterator>(iter, it));
-            for(; iter != s.lock_balance_pairs.end(); )
+            if( iter->unlock_time <= time_point_sec(now()) )
             {
-                if( iter->lock_time < time_point_sec(now()))
+                for( int64_t  i = iter->cycle_counts; i > 0; i-- )
                 {
-                    s.balance  += iter->lock_balance;  ;
-                    iter = s.lock_balance_pairs.erase(iter);
-                }
-                else
-                {
-                    ++iter;
+                    if( iter->lock_balance >=  i*iter->cycle_rele_num && time_point_sec(now()) > (iter->cycle_starttime + i*iter->cycle_time) )
+                    {
+                        iter->lock_balance = iter->lock_balance -  i*iter->cycle_rele_num;
+                        s.balance  +=  i*iter->cycle_rele_num; 
+                        break;
+                    }
                 }
             }
-            s.update_time = time_point_sec(now());
-            if(s.lock_balance_pairs.size() == 0 )s.lock_status = 0;
-            });
-            sub_balance( from, quantity );
-            add_balance( to, quantity, from );
-        } 
+            
+            // if( iter->unlock_time >= time_point_sec(now()) || )
+            // {
+            //     if( iter->rele_times == 0)
+            //     {
+            //         iter->lock_balance = iter->lock_balance - iter->init_rele_num;
+            //         s.balance  += iter->init_rele_num;  
+            //         iter->rele_times++;
+            //     }
+            //     else 
+            //     {
+            //         iter->lock_balance = iter->lock_balance - iter->cycle_rele_num;
+            //         s.balance  += iter->cycle_rele_num; 
+            //         iter->rele_times++;
+            //     }
+            //     if( iter->rele_times == iter->cycle_counts )
+            //     {
+            //         iter = s.lock_balance_pairs.erase(iter);
+            //     }
+            //     else
+            //     {
+            //         ++iter;
+            //     }
+            // }
+            if( iter->cycle_starttime + iter->cycle_counts*iter->cycle_time < time_point_sec(now()) )
+            {
+                iter = s.lock_balance_pairs.erase(iter);
+            }
+            else
+            {
+                ++iter;
+            }
+        }
+        s.update_time = time_point_sec(now());
+        //if(s.lock_balance_pairs.size() == 0 )s.lock_status = 0;
+        });
+        sub_balance( from, quantity );
+        add_balance( to, quantity, from );
     }
     else
     {
@@ -254,7 +243,7 @@ void lt_erc20::sub_balance( account_name owner, asset value ) {
    eosio_assert( from.balance.amount >= value.amount, "overdrawn balance" );
 
 
-   if( from.balance.amount == value.amount ) {
+   if( from.balance.amount == value.amount && from.lock_balance_pairs.size() == 0 ) {
       from_acnts.erase( from );
    } else {
       from_acnts.modify( from, owner, [&]( auto& a ) {
@@ -273,7 +262,7 @@ void lt_erc20::add_balance( account_name owner, asset value, account_name ram_pa
         a.balance = value;
         a.owner       = owner;
         //a.lock_balance = value - value;
-        a.lock_status = 0;
+        //a.lock_status = 0;
         //a.lock_time   = time_point_sec(now());
         a.update_time = time_point_sec(now());
       });
@@ -305,7 +294,7 @@ void lt_erc20::lock_currency( asset quantity )
     statstable.modify( st, 0, [&]( auto& s ) {
     s.supply += quantity;
     s.update_time = time_point_sec(now());
-    s.lock_status = 1;
+    //s.lock_status = 1;
     });
 }
 
@@ -329,7 +318,7 @@ void lt_erc20::unlock_currency( asset quantity )
     statstable.modify( st, 0, [&]( auto& s ) {
     s.supply += quantity;
     s.update_time = time_point_sec(now());
-    s.lock_status = 0;
+    //s.lock_status = 0;
     });
 }
 
