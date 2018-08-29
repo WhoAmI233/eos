@@ -127,11 +127,6 @@ void lt_erc20::issue( account_name to, asset quantity, string memo,
                     } );
             });
         }
-
-
-        /*if( to != st.issuer ) {
-        SEND_INLINE_ACTION( *this, transfer, {st.issuer,N(active)}, {st.issuer, to, quantity, memo, currency_type} );
-        }*/
     }
     else
     {
@@ -173,10 +168,7 @@ void lt_erc20::transfer( account_name from,
         const auto& ac = from_acnts.get( quantity.symbol.name(), "no balance object found 2" );
     
         from_acnts.modify( ac, 0, [&]( auto& s ) {
-        //int rele_times = s.lock_balance_pairs.lock_balance.amount
-        //lock_asset::iterator iter;
         lock_asset::iterator   iter = s.lock_balance_pairs.begin();
-        //advance(iter, distance<lock_asset::const_iterator>(iter, it));
         for(; iter != s.lock_balance_pairs.end(); )//此处进行周期性释放限制
         {
             if( iter->unlock_time <= time_point_sec(now()) )
@@ -191,30 +183,6 @@ void lt_erc20::transfer( account_name from,
                     }
                 }
             }
-            
-            // if( iter->unlock_time >= time_point_sec(now()) || )
-            // {
-            //     if( iter->rele_times == 0)
-            //     {
-            //         iter->lock_balance = iter->lock_balance - iter->init_rele_num;
-            //         s.balance  += iter->init_rele_num;  
-            //         iter->rele_times++;
-            //     }
-            //     else 
-            //     {
-            //         iter->lock_balance = iter->lock_balance - iter->cycle_rele_num;
-            //         s.balance  += iter->cycle_rele_num; 
-            //         iter->rele_times++;
-            //     }
-            //     if( iter->rele_times == iter->cycle_counts )
-            //     {
-            //         iter = s.lock_balance_pairs.erase(iter);
-            //     }
-            //     else
-            //     {
-            //         ++iter;
-            //     }
-            // }
             if( iter->cycle_starttime + iter->cycle_counts*iter->cycle_time < time_point_sec(now()) )
             {
                 iter = s.lock_balance_pairs.erase(iter);
@@ -225,7 +193,6 @@ void lt_erc20::transfer( account_name from,
             }
         }
         s.update_time = time_point_sec(now());
-        //if(s.lock_balance_pairs.size() == 0 )s.lock_status = 0;
         });
         sub_balance( from, quantity );
         add_balance( to, quantity, from );
@@ -261,9 +228,6 @@ void lt_erc20::add_balance( account_name owner, asset value, account_name ram_pa
       to_acnts.emplace( ram_payer, [&]( auto& a ){
         a.balance = value;
         a.owner       = owner;
-        //a.lock_balance = value - value;
-        //a.lock_status = 0;
-        //a.lock_time   = time_point_sec(now());
         a.update_time = time_point_sec(now());
       });
    } else {
@@ -274,78 +238,105 @@ void lt_erc20::add_balance( account_name owner, asset value, account_name ram_pa
    }
 }
 
-void lt_erc20::lock_currency( asset quantity )
-{
-    auto sym = quantity.symbol;
-    eosio_assert( sym.is_valid(), "invalid symbol name" );
-
-    auto sym_name = sym.name();
-    stats statstable( _self, sym_name );
-    auto existing = statstable.find( sym_name );
-    eosio_assert( existing != statstable.end(), "token with symbol does not exist, create token before issue" );
-    const auto& st = *existing;
-
-    require_auth( st.issuer );
-    eosio_assert( quantity.is_valid(), "invalid quantity" );
-    eosio_assert( quantity.amount > 0, "must issue positive quantity" );
-
-    eosio_assert( quantity.symbol == st.supply.symbol, "symbol precision mismatch" );
-
-    statstable.modify( st, 0, [&]( auto& s ) {
-    s.supply += quantity;
-    s.update_time = time_point_sec(now());
-    //s.lock_status = 1;
-    });
-}
-
-void lt_erc20::unlock_currency( asset quantity )
-{
-    auto sym = quantity.symbol;
-    eosio_assert( sym.is_valid(), "invalid symbol name" );
-
-    auto sym_name = sym.name();
-    stats statstable( _self, sym_name );
-    auto existing = statstable.find( sym_name );
-    eosio_assert( existing != statstable.end(), "token with symbol does not exist, create token before issue" );
-    const auto& st = *existing;
-
-    require_auth( st.issuer );
-    eosio_assert( quantity.is_valid(), "invalid quantity" );
-    eosio_assert( quantity.amount > 0, "must issue positive quantity" );
-
-    eosio_assert( quantity.symbol == st.supply.symbol, "symbol precision mismatch" );
-
-    statstable.modify( st, 0, [&]( auto& s ) {
-    s.supply += quantity;
-    s.update_time = time_point_sec(now());
-    //s.lock_status = 0;
-    });
-}
-
-void lt_erc20::foo( asset quantity, string foo_name, account_name owner, asset value )
+void lt_erc20::foo( string foo_name, account_name owner, asset value )
 {
     if( foo_name == "lock_currency")
     {
-        lock_currency( quantity );
     }
     else if( foo_name == "unlock_currency")
     {
-        unlock_currency( quantity );
     }
-    else if( foo_name == "clear_table")
+    else if( foo_name == "clear_account_table")
     {
-        clear_table( owner );
+        clear_account_table( owner );
     }
 }
 
-
-
- void lt_erc20::clear_table(account_name owner)
+ void lt_erc20::clear_account_table(account_name owner)
  {
     accounts from_acnts( _self, owner );
-    //auto to = from_acnts.find( value.symbol.name() );
     auto ite = from_acnts.begin();
     while(ite != from_acnts.end()) {
         ite = from_acnts.erase(ite);
     }
  }
+
+uint64_t lt_erc20::total_card_supply()
+{
+    cards card_table(_self, _self); 
+    auto carditr = card_table.begin();
+    uint64_t card_id = 0;
+    while(carditr != card_table.end()){
+        card_id++;
+        carditr++;
+    }
+    return card_id;
+}
+
+void lt_erc20::issuecards(account_name issuer, 
+                        account_name owner, 
+                        uint64_t     activation_time, 
+                        uint64_t     exchange_time, 
+                        uint64_t     expiry_time,
+                        bool         activation_state,
+                        bool         disassembly_state,
+                        bool         exchange_state,
+                        asset        supply)
+{
+    require_auth(_self);
+
+    print("create card to:", name{owner});
+
+    uint64_t card_id = total_card_supply() + 1;
+
+    print("\n new card id:", card_id);
+
+    // accounts account_table(_self, owner);
+    // auto accountitr = account_table.find(owner);
+
+    // if(accountitr == account_table.end()){
+    //     account_table.emplace(_self, [&](auto &a){
+    //         a.owner = owner;
+    //         a.balance = supply - supply;
+    //     });
+    // }
+
+    stats statstable( _self, supply.symbol.name() );
+    auto existing = statstable.find( supply.symbol.name() );
+    print("\n supply.symbol:", supply.symbol.name());
+
+    eosio_assert( existing != statstable.end(), "token with symbol does not exist, create token before issue" );
+    const auto& st = *existing;
+    eosio_assert( supply.amount <= st.max_supply.amount - st.supply.amount, "supply exceeds available supply");
+    statstable.modify( st, 0, [&]( auto& s ) {
+        s.supply      += supply;
+        s.update_time = time_point_sec(now());
+        });
+
+    // action(
+    // permission_level{ _self, N(active) },
+    // N(ltoooooerc2o), N(issue),  //调用 ltoooooerc2o 的 Transfer 合约
+    // std::make_tuple(_self, to, quantity, std::string(""))
+    // ).send();
+
+    cards card_table(_self, _self); 
+    card_table.emplace(_self, [&](auto &a) {
+        a.id = card_id;
+        a.parent_id = 0;
+        a.owner = owner;  
+        a.issuer = issuer; 
+        a.activation_time = time_point_sec(now()) + activation_time;
+        a.exchange_time = time_point_sec(now()) + exchange_time;
+        a.expiry_time = time_point_sec(now()) + expiry_time;
+        a.issue_time = time_point_sec(now());
+        a.update_time = time_point_sec(now());
+        a.activation_state = activation_state;
+        a.disassembly_state = disassembly_state;   
+        a.exchange_state = exchange_state;
+        a.supply = supply;                           
+    });
+
+
+}
+
+ 

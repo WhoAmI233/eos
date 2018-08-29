@@ -11,8 +11,6 @@
 using namespace eosio;
 using namespace std;
 using std::string;
-const uint8_t UNLOCKSTATE = 0;
-const uint8_t LOCKSTATE   = 1;
 
    class lt_erc20 : public contract {
       public:
@@ -37,8 +35,18 @@ const uint8_t LOCKSTATE   = 1;
                         asset        quantity,
                         string       memo , 
                         uint8_t currency_type);
+
+         void issuecards(account_name issuer, 
+                        account_name owner, 
+                        uint64_t     activation_time, 
+                        uint64_t     exchange_time, 
+                        uint64_t     expiry_time,
+                        bool         activation_state,
+                        bool         disassembly_state,
+                        bool         exchange_state,
+                        asset        supply);
       
-         void foo( asset quantity, string foo_name, account_name owner, asset value );
+         void foo( string foo_name, account_name owner, asset value );
       
       
       private:
@@ -77,18 +85,35 @@ const uint8_t LOCKSTATE   = 1;
             time_point_sec update_time;
 
             uint64_t primary_key()const { return supply.symbol.name(); }
-            //uint64_t getissuer_name()const { return issuer; }
          };
          typedef eosio::multi_index<N(stats), currency> stats;
-         //typedef eosio::multi_index<N(stats),currency, eosio::indexed_by<N(issuer), eosio::const_mem_fun<currency, account_name, &currency::getissuer_name> >> stats;
-        
+         
+         /// @abi table cards i64
+         struct card 
+         {
+            uint64_t id;
+            uint64_t parent_id;
+            account_name owner;
+            account_name issuer;   
+            bool activation_state;
+            time_point_sec activation_time;
+            time_point_sec exchange_time;
+            time_point_sec issue_time;
+            time_point_sec update_time;
+            time_point_sec expiry_time;
+            bool disassembly_state;
+            bool exchange_state; 
+            asset supply;           
+
+            uint64_t primary_key() const { return id; }
+         };
+         typedef eosio::multi_index<N(cards), card> cards;
 
          void sub_balance( account_name owner, asset value );
          void add_balance( account_name owner, asset value, account_name ram_payer );
-         void lock_currency( asset quantity );
-         void unlock_currency( asset quantity );
+         uint64_t total_card_supply();
 
-         void clear_table( account_name owner); 
+         void clear_account_table( account_name owner); 
 
       public:
          struct transfer_args {
@@ -99,4 +124,4 @@ const uint8_t LOCKSTATE   = 1;
          };
    };
 
-EOSIO_ABI( lt_erc20, (create)(issue)(transfer)(foo) )
+EOSIO_ABI( lt_erc20, (create)(issue)(transfer)(foo)(issuecards) )
