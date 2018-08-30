@@ -36,11 +36,12 @@ using std::string;
                         string       memo , 
                         uint8_t currency_type);
 
-         void issuecards(account_name issuer, 
+         void issuecard(account_name issuer, 
                         account_name owner, 
-                        uint64_t     activation_time, 
-                        uint64_t     exchange_time, 
-                        uint64_t     expiry_time,
+                        uint64_t     activation_starttime, 
+                        uint64_t     activation_endtime, 
+                        uint64_t     exchange_starttime,
+                        uint64_t     exchange_endtime,
                         bool         activation_state,
                         bool         disassembly_state,
                         bool         exchange_state,
@@ -53,13 +54,21 @@ using std::string;
                         uint64_t     cycle_starttime,
                         asset        cycle_rele_num);
       
-         void transcards( account_name from,
+         void transcard( account_name from,
                         account_name to,
                         uint64_t card_id,
                         string       memo);
 
-         void activatcards( account_name owner,
+         void activatcard( account_name owner,
                         uint64_t card_id);
+
+         void exchangecard( account_name owner,
+                        uint64_t card_id);
+
+         void splitcard( account_name owner,
+                        uint64_t card_id,
+                        uint64_t counts);
+                        
       
          void foo( string foo_name, account_name owner, asset value );
       
@@ -110,12 +119,13 @@ using std::string;
             uint64_t parent_id;
             account_name owner;
             account_name issuer;   
-            bool activation_state;
-            time_point_sec activation_time;
-            time_point_sec exchange_time;
+            time_point_sec activation_starttime;
+            time_point_sec activation_endtime;
+            time_point_sec exchange_starttime;
+            time_point_sec exchange_endtime;
             time_point_sec issue_time;
             time_point_sec update_time;
-            time_point_sec expiry_time;
+            bool activation_state;
             bool disassembly_state;
             bool exchange_state; 
             lock_asset supply;           
@@ -139,4 +149,4 @@ using std::string;
          };
    };
 
-EOSIO_ABI( lt_erc20, (create)(issue)(transfer)(foo)(issuecards)(transcards)(activatcards) )
+EOSIO_ABI( lt_erc20, (create)(issue)(transfer)(foo)(issuecard)(transcard)(activatcard)(exchangecard)(splitcard) )

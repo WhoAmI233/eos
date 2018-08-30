@@ -273,11 +273,12 @@ uint64_t lt_erc20::total_card_supply()
     return card_id;
 }
 
-void lt_erc20::issuecards(account_name issuer, 
+void lt_erc20::issuecard(account_name issuer, 
                         account_name owner, 
-                        uint64_t     activation_time, 
-                        uint64_t     exchange_time, 
-                        uint64_t     expiry_time,
+                        uint64_t     activation_starttime, 
+                        uint64_t     activation_endtime, 
+                        uint64_t     exchange_starttime,
+                        uint64_t     exchange_endtime,
                         bool         activation_state,
                         bool         disassembly_state,
                         bool         exchange_state,
@@ -296,7 +297,7 @@ void lt_erc20::issuecards(account_name issuer,
 
     uint64_t card_id = total_card_supply() + 1;
 
-    print("\n new card id:", card_id);
+    print(";new card id:", card_id);
 
     //print("issuer length:",name{owner}.to_string().length());
 
@@ -334,9 +335,10 @@ void lt_erc20::issuecards(account_name issuer,
         a.parent_id = 0;
         a.owner = owner;  
         a.issuer = issuer; 
-        a.activation_time = time_point_sec(now()) + activation_time;
-        a.exchange_time = time_point_sec(now()) + exchange_time;
-        a.expiry_time = time_point_sec(now()) + expiry_time;
+        a.activation_starttime = time_point_sec(now()) + activation_starttime;
+        a.activation_endtime = time_point_sec(now()) + activation_endtime;
+        a.exchange_starttime = time_point_sec(now()) + exchange_starttime;
+        a.exchange_endtime = time_point_sec(now()) + exchange_endtime;
         a.issue_time = time_point_sec(now());
         a.update_time = time_point_sec(now());
         a.activation_state = activation_state;
@@ -358,7 +360,7 @@ void lt_erc20::issuecards(account_name issuer,
 }
 
  
-void lt_erc20::transcards( account_name from,
+void lt_erc20::transcard( account_name from,
                         account_name to,
                         uint64_t card_id,
                         string       memo )
@@ -375,10 +377,13 @@ void lt_erc20::transcards( account_name from,
     auto existing = card_table.find( card_id );
     eosio_assert( existing != card_table.end(), "This card does not exist." );
     const auto& exist_card = *existing;
-    print("exist_card.owner: ",exist_card.owner);
-    print("from: ",from);
+    // print("exist_card.owner: ",exist_card.owner);
+    // print("from: ",from);
     eosio_assert( exist_card.activation_state == true, "This card is still not activated and can not be operated." );
-    eosio_assert( exist_card.owner == from, "This card does not belong to this holder." );
+    eosio_assert( exist_card.exchange_state == false, "This card has been exchanged." );
+    // eosio_assert( exist_card.disassembly_state == false, "This card has been splited." );
+    eosio_assert( exist_card.owner == from, "This card does not belong to this owner." );
+    eosio_assert( time_point_sec(now()) < exist_card.exchange_endtime  , "This card has expired." );
     
     card_table.modify( exist_card, 0, [&]( auto& s ) {
         s.owner       = to;
@@ -387,7 +392,7 @@ void lt_erc20::transcards( account_name from,
 
 }
 
-void lt_erc20::activatcards( account_name owner,
+void lt_erc20::activatcard( account_name owner,
                         uint64_t card_id)
 {
     require_auth( owner );
@@ -398,10 +403,134 @@ void lt_erc20::activatcards( account_name owner,
     const auto& exist_card = *existing;
     eosio_assert( exist_card.owner == owner, "This card does not belong to this holder." );
     eosio_assert( exist_card.activation_state == false, "This card has been activated." );
-    eosio_assert( time_point_sec(now()) >= exist_card.activation_time , "Not until activation time" );
+    eosio_assert( time_point_sec(now()) < exist_card.exchange_endtime , "This card has expired." );
+    eosio_assert( time_point_sec(now()) >= exist_card.activation_starttime && time_point_sec(now()) <= exist_card.activation_endtime  , "This card is not in the activation period." );
     
     card_table.modify( exist_card, 0, [&]( auto& s ) {
         s.activation_state       = true;
+        s.update_time = time_point_sec(now());
+        });
+
+}
+
+void lt_erc20::exchangecard( account_name owner,
+                        uint64_t card_id)
+{
+    require_auth( owner );
+    
+    cards card_table(_self, _self); 
+    auto existing = card_table.find( card_id );
+    eosio_assert( existing != card_table.end(), "This card does not exist." );
+    const auto& exist_card = *existing;
+    eosio_assert( exist_card.owner == owner, "This card does not belong to this holder." );
+    eosio_assert( exist_card.activation_state == true, "This card is still not activated and can not be operated." );
+    eosio_assert( exist_card.exchange_state == false, "This card has been exchanged." );
+    // eosio_assert( exist_card.disassembly_state == false, "This card has been splited." );
+    eosio_assert( time_point_sec(now()) < exist_card.exchange_endtime , "This card has expired." );
+    eosio_assert( time_point_sec(now()) > exist_card.exchange_starttime , "This card does not reach the time to exchange." );
+    
+
+    accounts account_table( _self, owner );
+    lock_asset::const_iterator  iter_card_lockasset = exist_card.supply.begin();
+    auto acc = account_table.find( iter_card_lockasset->lock_balance.symbol.name() );
+    if( acc == account_table.end() ) 
+    {
+        account_table.emplace( exist_card.issuer, [&]( auto& a ){
+            a.balance     = iter_card_lockasset->init_rele_num;
+            a.owner       = owner;
+            a.update_time = time_point_sec(now());
+            a.lock_balance_pairs.push_back(lock_balance_pair {
+                iter_card_lockasset->lock_balance - iter_card_lockasset->init_rele_num, 
+                iter_card_lockasset->unlock_time,
+                iter_card_lockasset->issue_time,
+                iter_card_lockasset->init_rele_num,
+                iter_card_lockasset->cycle_time,
+                iter_card_lockasset->cycle_counts,
+                iter_card_lockasset->cycle_starttime,
+                iter_card_lockasset->cycle_rele_num                            
+                } );
+        });
+    } 
+    else 
+    {
+        account_table.modify( acc, 0, [&]( auto& a ) {
+            a.balance     += iter_card_lockasset->init_rele_num;
+            a.update_time = time_point_sec(now());
+            a.lock_balance_pairs.push_back(lock_balance_pair {
+                iter_card_lockasset->lock_balance - iter_card_lockasset->init_rele_num, 
+                iter_card_lockasset->unlock_time,
+                iter_card_lockasset->issue_time,
+                iter_card_lockasset->init_rele_num,
+                iter_card_lockasset->cycle_time,
+                iter_card_lockasset->cycle_counts,
+                iter_card_lockasset->cycle_starttime,
+                iter_card_lockasset->cycle_rele_num                           
+                } );
+        });
+    }
+
+    card_table.modify( exist_card, 0, [&]( auto& s ) {
+        s.exchange_state = true;
+        s.update_time = time_point_sec(now());
+        });
+
+}
+
+
+
+void lt_erc20::splitcard( account_name owner,
+                        uint64_t card_id,
+                        uint64_t counts)
+{
+    require_auth( owner );
+    
+    cards card_table(_self, _self); 
+    auto existing = card_table.find( card_id );
+    eosio_assert( existing != card_table.end(), "This card does not exist." );
+    const auto& exist_card = *existing;
+    eosio_assert( exist_card.owner == owner, "This card does not belong to this holder." );
+    eosio_assert( exist_card.activation_state == true, "This card is still not activated and can not be operated." );
+    eosio_assert( exist_card.exchange_state == false, "This card has been exchanged." );
+    eosio_assert( exist_card.disassembly_state == false, "This card has been splited." );
+    eosio_assert( time_point_sec(now()) < exist_card.exchange_endtime , "This card has expired." );
+    
+    uint64_t child_card_id = total_card_supply();
+    lock_asset::const_iterator  iter_card_lockasset = exist_card.supply.begin();
+    // asset split_lock_balance  =
+    // split_init_rele_num
+    // split_cycle_rele_num
+    for( int i = 1; i <= counts; i++)
+    {        
+        child_card_id = child_card_id + 1;
+        card_table.emplace(_self, [&](auto &a) {
+        a.id = child_card_id;
+        a.parent_id = card_id;
+        a.owner = exist_card.owner;  
+        a.issuer = exist_card.issuer; 
+        a.activation_starttime = exist_card.activation_starttime;
+        a.activation_endtime = exist_card.activation_endtime;
+        a.exchange_starttime = exist_card.exchange_starttime;
+        a.exchange_endtime = exist_card.exchange_endtime;
+        a.issue_time = exist_card.issue_time;
+        a.update_time = time_point_sec(now());
+        a.activation_state = true;
+        a.disassembly_state = true;   
+        a.exchange_state = false;
+        a.supply.push_back(lock_balance_pair {
+                    iter_card_lockasset->lock_balance / counts, 
+                    iter_card_lockasset->unlock_time,
+                    iter_card_lockasset->issue_time,
+                    iter_card_lockasset->init_rele_num / counts,
+                    iter_card_lockasset->cycle_time,
+                    iter_card_lockasset->cycle_counts,
+                    iter_card_lockasset->cycle_starttime,
+                    iter_card_lockasset->cycle_rele_num / counts                              
+                    } );                          
+        });
+    }
+
+    card_table.modify( exist_card, 0, [&]( auto& s ) {
+        s.disassembly_state = true;
         s.update_time = time_point_sec(now());
         });
 
