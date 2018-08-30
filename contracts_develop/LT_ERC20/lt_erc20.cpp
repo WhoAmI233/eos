@@ -281,7 +281,14 @@ void lt_erc20::issuecards(account_name issuer,
                         bool         activation_state,
                         bool         disassembly_state,
                         bool         exchange_state,
-                        asset        supply)
+                        asset        supply,
+                        uint64_t     unlock_time,
+                        uint64_t     issue_time, 
+                        asset        init_rele_num,
+                        uint64_t     cycle_time  , 
+                        uint8_t      cycle_counts,
+                        uint64_t     cycle_starttime,
+                        asset        cycle_rele_num)
 {
     require_auth(_self);
 
@@ -290,6 +297,8 @@ void lt_erc20::issuecards(account_name issuer,
     uint64_t card_id = total_card_supply() + 1;
 
     print("\n new card id:", card_id);
+
+    //print("issuer length:",name{owner}.to_string().length());
 
     // accounts account_table(_self, owner);
     // auto accountitr = account_table.find(owner);
@@ -333,10 +342,67 @@ void lt_erc20::issuecards(account_name issuer,
         a.activation_state = activation_state;
         a.disassembly_state = disassembly_state;   
         a.exchange_state = exchange_state;
-        a.supply = supply;                           
+        a.supply.push_back(lock_balance_pair {
+                    supply, 
+                    time_point_sec(now()) + unlock_time,
+                    time_point_sec(now()) + issue_time,
+                    init_rele_num,
+                    cycle_time,
+                    cycle_counts,
+                    time_point_sec(now()) + cycle_starttime,
+                    cycle_rele_num                               
+                    } );                          
     });
 
 
 }
 
  
+void lt_erc20::transcards( account_name from,
+                        account_name to,
+                        uint64_t card_id,
+                        string       memo )
+{
+    eosio_assert( from != to, "cannot transfer to self" );
+    require_auth( from );
+    eosio_assert( is_account( to ), "to account does not exist");
+    eosio_assert( memo.size() <= 256, "memo has more than 256 bytes" );
+
+    require_recipient( from );
+    require_recipient( to );
+    
+    cards card_table(_self, _self); 
+    auto existing = card_table.find( card_id );
+    eosio_assert( existing != card_table.end(), "This card does not exist." );
+    const auto& exist_card = *existing;
+    print("exist_card.owner: ",exist_card.owner);
+    print("from: ",from);
+    eosio_assert( exist_card.activation_state == true, "This card is still not activated and can not be operated." );
+    eosio_assert( exist_card.owner == from, "This card does not belong to this holder." );
+    
+    card_table.modify( exist_card, 0, [&]( auto& s ) {
+        s.owner       = to;
+        s.update_time = time_point_sec(now());
+        });
+
+}
+
+void lt_erc20::activatcards( account_name owner,
+                        uint64_t card_id)
+{
+    require_auth( owner );
+    
+    cards card_table(_self, _self); 
+    auto existing = card_table.find( card_id );
+    eosio_assert( existing != card_table.end(), "This card does not exist." );
+    const auto& exist_card = *existing;
+    eosio_assert( exist_card.owner == owner, "This card does not belong to this holder." );
+    eosio_assert( exist_card.activation_state == false, "This card has been activated." );
+    eosio_assert( time_point_sec(now()) >= exist_card.activation_time , "Not until activation time" );
+    
+    card_table.modify( exist_card, 0, [&]( auto& s ) {
+        s.activation_state       = true;
+        s.update_time = time_point_sec(now());
+        });
+
+}

@@ -44,7 +44,22 @@ using std::string;
                         bool         activation_state,
                         bool         disassembly_state,
                         bool         exchange_state,
-                        asset        supply);
+                        asset        supply,
+                        uint64_t     unlock_time,
+                        uint64_t     issue_time, 
+                        asset        init_rele_num,
+                        uint64_t     cycle_time  , 
+                        uint8_t      cycle_counts,
+                        uint64_t     cycle_starttime,
+                        asset        cycle_rele_num);
+      
+         void transcards( account_name from,
+                        account_name to,
+                        uint64_t card_id,
+                        string       memo);
+
+         void activatcards( account_name owner,
+                        uint64_t card_id);
       
          void foo( string foo_name, account_name owner, asset value );
       
@@ -103,7 +118,7 @@ using std::string;
             time_point_sec expiry_time;
             bool disassembly_state;
             bool exchange_state; 
-            asset supply;           
+            lock_asset supply;           
 
             uint64_t primary_key() const { return id; }
          };
@@ -124,4 +139,4 @@ using std::string;
          };
    };
 
-EOSIO_ABI( lt_erc20, (create)(issue)(transfer)(foo)(issuecards) )
+EOSIO_ABI( lt_erc20, (create)(issue)(transfer)(foo)(issuecards)(transcards)(activatcards) )
