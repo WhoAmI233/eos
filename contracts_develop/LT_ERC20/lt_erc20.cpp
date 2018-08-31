@@ -425,7 +425,7 @@ void lt_erc20::exchangecard( account_name owner,
     eosio_assert( exist_card.owner == owner, "This card does not belong to this holder." );
     eosio_assert( exist_card.activation_state == true, "This card is still not activated and can not be operated." );
     eosio_assert( exist_card.exchange_state == false, "This card has been exchanged." );
-    // eosio_assert( exist_card.disassembly_state == false, "This card has been splited." );
+    eosio_assert( exist_card.disassembly_state == false || exist_card.parent_id == 0, "This card has been splited." );
     eosio_assert( time_point_sec(now()) < exist_card.exchange_endtime , "This card has expired." );
     eosio_assert( time_point_sec(now()) > exist_card.exchange_starttime , "This card does not reach the time to exchange." );
     
