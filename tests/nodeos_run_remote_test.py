@@ -8,8 +8,10 @@ import subprocess
 
 ###############################################################
 # nodeos_run_remote_test
+#
 #  Tests remote capability of the nodeos_run_test. Test will setup cluster and pass nodes info to nodeos_run_test. E.g.
 #  nodeos_run_remote_test.py -v --clean-run --dump-error-detail
+#
 ###############################################################
 
 Print=Utils.Print
@@ -33,7 +35,7 @@ total_nodes=pnodes
 actualTest="tests/nodeos_run_test.py"
 testSuccessful=False
 
-cluster=Cluster()
+cluster=Cluster(walletd=True)
 try:
     Print("BEGIN")
     cluster.killall(allInstances=killAll)
@@ -42,7 +44,8 @@ try:
     Print ("producing nodes: %s, non-producing nodes: %d, topology: %s, delay between nodes launch(seconds): %d" %
            (pnodes, total_nodes-pnodes, topo, delay))
     Print("Stand up cluster")
-    if cluster.launch(pnodes, total_nodes, prodCount, topo, delay, onlyBios=onlyBios, dontKill=dontKill) is False:
+
+    if cluster.launch(pnodes=pnodes, totalNodes=total_nodes, prodCount=prodCount, topo=topo, delay=delay, onlyBios=onlyBios) is False:
         errorExit("Failed to stand up eos cluster.")
 
     Print ("Wait for Cluster stabilization")
@@ -54,7 +57,7 @@ try:
     defproduceraPrvtKey=producerKeys["defproducera"]["private"]
     defproducerbPrvtKey=producerKeys["defproducerb"]["private"]
 
-    cmd="%s --dont-launch --defproducera_prvt_key %s --defproducerb_prvt_key %s %s %s %s" % (actualTest, defproduceraPrvtKey, defproducerbPrvtKey, "-v" if debug else "", "--dont-kill" if dontKill else "", "--only-bios" if onlyBios else "")
+    cmd="%s --dont-launch --defproducera_prvt_key %s --defproducerb_prvt_key %s %s %s %s" % (actualTest, defproduceraPrvtKey, defproducerbPrvtKey, "-v" if debug else "", "--leave-running" if dontKill else "", "--only-bios" if onlyBios else "")
     Print("Starting up %s test: %s" % ("nodeos", actualTest))
     Print("cmd: %s\n" % (cmd))
     if 0 != subprocess.call(cmd, shell=True):

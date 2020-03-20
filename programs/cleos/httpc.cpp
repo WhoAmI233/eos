@@ -18,9 +18,11 @@
 #include <boost/asio/ssl.hpp>
 #include <fc/variant.hpp>
 #include <fc/io/json.hpp>
+#include <fc/network/platform_root_ca.hpp>
 #include <eosio/chain/exceptions.hpp>
 #include <eosio/http_plugin/http_plugin.hpp>
 #include <eosio/chain_plugin/chain_plugin.hpp>
+#include <boost/asio/ssl/rfc2818_verification.hpp>
 #include "httpc.hpp"
 
 using boost::asio::ip::tcp;
@@ -87,22 +89,33 @@ namespace eosio { namespace client { namespace http {
          if(std::regex_search(header, match, clregex))
             response_content_length = std::stoi(match[1]);
       }
-      EOS_ASSERT(response_content_length >= 0, invalid_http_response, "Invalid content-length response");
+
+      // Attempt to read the response body using the length indicated by the
+      // Content-length header. If the header was not present just read all available bytes.
+      if( response_content_length != -1 ) {
+         response_content_length -= response.size();
+         if( response_content_length > 0 )
+            boost::asio::read(socket, response, boost::asio::transfer_exactly(response_content_length));
+      } else {
+         boost::system::error_code ec;
+         boost::asio::read(socket, response, boost::asio::transfer_all(), ec);
+         EOS_ASSERT(!ec || ec == boost::asio::ssl::error::stream_truncated, http_exception, "Unable to read http response: ${err}", ("err",ec.message()));
+      }
 
       std::stringstream re;
-      // Write whatever content we already have to output.
-      response_content_length -= response.size();
-      if (response.size() > 0)
-         re << &response;
-
-      boost::asio::read(socket, response, boost::asio::transfer_exactly(response_content_length));
       re << &response;
-
       return re.str();
    }
 
    parsed_url parse_url( const string& server_url ) {
       parsed_url res;
+
+      //unix socket doesn't quite follow classical "URL" rules so deal with it manually
+      if(boost::algorithm::starts_with(server_url, "unix://")) {
+         res.scheme = "unix";
+         res.server = server_url.substr(strlen("unix://"));
+         return res;
+      }
 
       //via rfc3986 and modified a bit to suck out the port number
       //Sadly this doesn't work for ipv6 addresses
@@ -125,11 +138,14 @@ namespace eosio { namespace client { namespace http {
    }
 
    resolved_url resolve_url( const http_context& context, const parsed_url& url ) {
+      if(url.scheme == "unix")
+         return resolved_url(url);
+
       tcp::resolver resolver(context->ios);
       boost::system::error_code ec;
       auto result = resolver.resolve(tcp::v4(), url.server, url.port, ec);
       if (ec) {
-         EOS_THROW(fail_to_resolve_host, "Error resolving \"${server}:${url}\" : ${m}", ("server", url.server)("port",url.port)("m",ec.message()));
+         EOS_THROW(fail_to_resolve_host, "Error resolving \"${server}:${port}\" : ${m}", ("server", url.server)("port",url.port)("m",ec.message()));
       }
 
       // non error results are guaranteed to return a non-empty range
@@ -173,7 +189,7 @@ namespace eosio { namespace client { namespace http {
                              bool print_response ) {
    std::string postjson;
    if( !postdata.is_null() ) {
-      postjson = print_request ? fc::json::to_pretty_string( postdata ) : fc::json::to_string( postdata );
+      postjson = print_request ? fc::json::to_pretty_string( postdata ) : fc::json::to_string( postdata, fc::time_point::maximum() );
    }
 
    const auto& url = cp.url;
@@ -186,12 +202,12 @@ namespace eosio { namespace client { namespace http {
    request_stream << "content-length: " << postjson.size() << "\r\n";
    request_stream << "Accept: */*\r\n";
    request_stream << "Connection: close\r\n";
-   request_stream << "\r\n";
    // append more customized headers
    std::vector<string>::iterator itr;
    for (itr = cp.headers.begin(); itr != cp.headers.end(); itr++) {
       request_stream << *itr << "\r\n";
    }
+   request_stream << "\r\n";
    request_stream << postjson;
 
    if ( print_request ) {
@@ -207,27 +223,26 @@ namespace eosio { namespace client { namespace http {
    std::string re;
 
    try {
-      if(url.scheme == "http") {
+      if(url.scheme == "unix") {
+         boost::asio::local::stream_protocol::socket unix_socket(cp.context->ios);
+         unix_socket.connect(boost::asio::local::stream_protocol::endpoint(url.server));
+         re = do_txrx(unix_socket, request, status_code);
+      }
+      else if(url.scheme == "http") {
          tcp::socket socket(cp.context->ios);
          do_connect(socket, url);
          re = do_txrx(socket, request, status_code);
       }
       else { //https
          boost::asio::ssl::context ssl_context(boost::asio::ssl::context::sslv23_client);
-#if defined( __APPLE__ )
-         //TODO: this is undocumented/not supported; fix with keychain based approach
-         ssl_context.load_verify_file("/private/etc/ssl/cert.pem");
-#elif defined( _WIN32 )
-         EOS_THROW(http_exception, "HTTPS on Windows not supported");
-#else
-         ssl_context.set_default_verify_paths();
-#endif
+         fc::add_platform_root_cas_to_context(ssl_context);
 
          boost::asio::ssl::stream<boost::asio::ip::tcp::socket> socket(cp.context->ios, ssl_context);
          SSL_set_tlsext_host_name(socket.native_handle(), url.server.c_str());
-         if(cp.verify_cert)
+         if(cp.verify_cert) {
             socket.set_verify_mode(boost::asio::ssl::verify_peer);
-
+            socket.set_verify_callback(boost::asio::ssl::rfc2818_verification(url.server));
+         }
          do_connect(socket.next_layer(), url);
          socket.handshake(boost::asio::ssl::stream_base::client);
          re = do_txrx(socket, request, status_code);

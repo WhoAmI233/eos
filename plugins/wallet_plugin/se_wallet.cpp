@@ -1,7 +1,3 @@
-/**
- *  @file
- *  @copyright defined in eos/LICENSE.txt
- */
 #include <eosio/wallet_plugin/se_wallet.hpp>
 #include <eosio/wallet_plugin/macos_user_auth.h>
 #include <eosio/chain/exceptions.hpp>
@@ -186,13 +182,12 @@ struct se_wallet_impl {
       return pub;
    }
 
-   optional<signature_type> try_sign_digest(const digest_type d, const public_key_type public_key) {
+   fc::optional<signature_type> try_sign_digest(const digest_type d, const public_key_type public_key) {
       auto it = _keys.find(public_key);
       if(it == _keys.end())
-         return optional<signature_type>{};
+         return fc::optional<signature_type>{};
 
       fc::ecdsa_sig sig = ECDSA_SIG_new();
-      BIGNUM *r = BN_new(), *s = BN_new();
       CFErrorRef error = nullptr;
 
       CFDataRef digestData = CFDataCreateWithBytesNoCopy(nullptr, (UInt8*)d.data(), d.data_size(), kCFAllocatorNull);
@@ -205,10 +200,8 @@ struct se_wallet_impl {
       }
 
       const UInt8* der_bytes = CFDataGetBytePtr(signature);
-
-      BN_bin2bn(der_bytes+4, der_bytes[3], r);
-      BN_bin2bn(der_bytes+6+der_bytes[3], der_bytes[4+der_bytes[3]+1], s);
-      ECDSA_SIG_set0(sig, r, s);
+      long derSize = CFDataGetLength(signature);
+      d2i_ECDSA_SIG(&sig.obj, &der_bytes, derSize);
 
       public_key_data kd;
       compact_signature compact_sig;
@@ -303,10 +296,18 @@ se_wallet::se_wallet() : my(new detail::se_wallet_impl()) {
       }
       unsigned int major, minor;
       if(sscanf(model, "MacBookPro%u,%u", &major, &minor) == 2) {
-         if(major >= 13 && minor >= 2) {
+         if((major >= 15) || (major >= 13 && minor >= 2)) {
             my->populate_existing_keys();
             return;
          }
+      }
+      if(sscanf(model, "Macmini%u", &major) == 1 && major >= 8) {
+         my->populate_existing_keys();
+         return;
+      }
+      if(sscanf(model, "MacBookAir%u", &major) == 1 && major >= 8) {
+         my->populate_existing_keys();
+         return;
       }
    }
 
@@ -357,7 +358,8 @@ bool se_wallet::import_key(string wif_key) {
 }
 
 string se_wallet::create_key(string key_type) {
-   return (string)my->create();
+   EOS_ASSERT(key_type.empty() || key_type == "R1", chain::unsupported_key_type_exception, "Secure Enclave wallet only supports R1 keys");
+   return my->create().to_string();
 }
 
 bool se_wallet::remove_key(string key) {
@@ -365,7 +367,7 @@ bool se_wallet::remove_key(string key) {
    return my->remove_key(key);
 }
 
-optional<signature_type> se_wallet::try_sign_digest(const digest_type digest, const public_key_type public_key) {
+fc::optional<signature_type> se_wallet::try_sign_digest(const digest_type digest, const public_key_type public_key) {
    return my->try_sign_digest(digest, public_key);
 }
 

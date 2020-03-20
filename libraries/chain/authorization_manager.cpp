@@ -1,8 +1,3 @@
-/**
- *  @file
- *  @copyright defined in eos/LICENSE.txt
- */
-
 #include <eosio/chain/authorization_manager.hpp>
 #include <eosio/chain/exceptions.hpp>
 #include <eosio/chain/permission_object.hpp>
@@ -12,20 +7,126 @@
 #include <eosio/chain/global_property_object.hpp>
 #include <eosio/chain/contract_types.hpp>
 #include <eosio/chain/generated_transaction_object.hpp>
+#include <boost/tuple/tuple_io.hpp>
+#include <eosio/chain/database_utils.hpp>
+#include <eosio/chain/protocol_state_object.hpp>
+
 
 namespace eosio { namespace chain {
+
+   using authorization_index_set = index_set<
+      permission_index,
+      permission_usage_index,
+      permission_link_index
+   >;
 
    authorization_manager::authorization_manager(controller& c, database& d)
    :_control(c),_db(d){}
 
    void authorization_manager::add_indices() {
-      _db.add_index<permission_index>();
-      _db.add_index<permission_usage_index>();
-      _db.add_index<permission_link_index>();
+      authorization_index_set::add_indices(_db);
    }
 
    void authorization_manager::initialize_database() {
       _db.create<permission_object>([](auto&){}); /// reserve perm 0 (used else where)
+   }
+
+   namespace detail {
+      template<>
+      struct snapshot_row_traits<permission_object> {
+         using value_type = permission_object;
+         using snapshot_type = snapshot_permission_object;
+
+         static snapshot_permission_object to_snapshot_row(const permission_object& value, const chainbase::database& db) {
+            snapshot_permission_object res;
+            res.name = value.name;
+            res.owner = value.owner;
+            res.last_updated = value.last_updated;
+            res.auth = value.auth.to_authority();
+
+            // lookup parent name
+            const auto& parent = db.get(value.parent);
+            res.parent = parent.name;
+
+            // lookup the usage object
+            const auto& usage = db.get<permission_usage_object>(value.usage_id);
+            res.last_used = usage.last_used;
+
+            return res;
+         };
+
+         static void from_snapshot_row(snapshot_permission_object&& row, permission_object& value, chainbase::database& db) {
+            value.name = row.name;
+            value.owner = row.owner;
+            value.last_updated = row.last_updated;
+            value.auth = row.auth;
+
+            value.parent = 0;
+            if (value.id == 0) {
+               EOS_ASSERT(row.parent == permission_name(), snapshot_exception, "Unexpected parent name on reserved permission 0");
+               EOS_ASSERT(row.name == permission_name(), snapshot_exception, "Unexpected permission name on reserved permission 0");
+               EOS_ASSERT(row.owner == name(), snapshot_exception, "Unexpected owner name on reserved permission 0");
+               EOS_ASSERT(row.auth.accounts.size() == 0,  snapshot_exception, "Unexpected auth accounts on reserved permission 0");
+               EOS_ASSERT(row.auth.keys.size() == 0,  snapshot_exception, "Unexpected auth keys on reserved permission 0");
+               EOS_ASSERT(row.auth.waits.size() == 0,  snapshot_exception, "Unexpected auth waits on reserved permission 0");
+               EOS_ASSERT(row.auth.threshold == 0,  snapshot_exception, "Unexpected auth threshold on reserved permission 0");
+               EOS_ASSERT(row.last_updated == time_point(),  snapshot_exception, "Unexpected auth last updated on reserved permission 0");
+               value.parent = 0;
+            } else if ( row.parent != permission_name()){
+               const auto& parent = db.get<permission_object, by_owner>(boost::make_tuple(row.owner, row.parent));
+
+               EOS_ASSERT(parent.id != 0, snapshot_exception, "Unexpected mapping to reserved permission 0");
+               value.parent = parent.id;
+            }
+
+            if (value.id != 0) {
+               // create the usage object
+               const auto& usage = db.create<permission_usage_object>([&](auto& p) {
+                  p.last_used = row.last_used;
+               });
+               value.usage_id = usage.id;
+            } else {
+               value.usage_id = 0;
+            }
+         }
+      };
+   }
+
+   void authorization_manager::add_to_snapshot( const snapshot_writer_ptr& snapshot ) const {
+      authorization_index_set::walk_indices([this, &snapshot]( auto utils ){
+         using section_t = typename decltype(utils)::index_t::value_type;
+
+         // skip the permission_usage_index as its inlined with permission_index
+         if (std::is_same<section_t, permission_usage_object>::value) {
+            return;
+         }
+
+         snapshot->write_section<section_t>([this]( auto& section ){
+            decltype(utils)::walk(_db, [this, &section]( const auto &row ) {
+               section.add_row(row, _db);
+            });
+         });
+      });
+   }
+
+   void authorization_manager::read_from_snapshot( const snapshot_reader_ptr& snapshot ) {
+      authorization_index_set::walk_indices([this, &snapshot]( auto utils ){
+         using section_t = typename decltype(utils)::index_t::value_type;
+
+         // skip the permission_usage_index as its inlined with permission_index
+         if (std::is_same<section_t, permission_usage_object>::value) {
+            return;
+         }
+
+         snapshot->read_section<section_t>([this]( auto& section ) {
+            bool more = !section.empty();
+            while(more) {
+               decltype(utils)::create(_db, [this, &section, &more]( auto &row ) {
+                  more = section.read_row(row, _db);
+               });
+            }
+         });
+      });
    }
 
    const permission_object& authorization_manager::create_permission( account_name account,
@@ -35,6 +136,10 @@ namespace eosio { namespace chain {
                                                                       time_point initial_creation_time
                                                                     )
    {
+      for(const key_weight& k: auth.keys)
+         EOS_ASSERT(k.key.which() < _db.get<protocol_state_object>().num_supported_key_types, unactivated_key_type,
+           "Unactivated key type used when creating permission");
+
       auto creation_time = initial_creation_time;
       if( creation_time == time_point() ) {
          creation_time = _control.pending_block_time();
@@ -62,6 +167,10 @@ namespace eosio { namespace chain {
                                                                       time_point initial_creation_time
                                                                     )
    {
+      for(const key_weight& k: auth.keys)
+         EOS_ASSERT(k.key.which() < _db.get<protocol_state_object>().num_supported_key_types, unactivated_key_type,
+           "Unactivated key type used when creating permission");
+
       auto creation_time = initial_creation_time;
       if( creation_time == time_point() ) {
          creation_time = _control.pending_block_time();
@@ -83,6 +192,10 @@ namespace eosio { namespace chain {
    }
 
    void authorization_manager::modify_permission( const permission_object& permission, const authority& auth ) {
+      for(const key_weight& k: auth.keys)
+         EOS_ASSERT(k.key.which() < _db.get<protocol_state_object>().num_supported_key_types, unactivated_key_type,
+           "Unactivated key type used when modifying permission");
+
       _db.modify( permission, [&](permission_object& po) {
          po.auth = auth;
          po.last_updated = _control.pending_block_time();
@@ -133,7 +246,7 @@ namespace eosio { namespace chain {
          auto link = _db.find<permission_link_object, by_action_name>(key);
          // If no specific link found, check for a contract-wide default
          if (link == nullptr) {
-            boost::get<2>(key) = "";
+            boost::get<2>(key) = {};
             link = _db.find<permission_link_object, by_action_name>(key);
          }
 
@@ -226,16 +339,20 @@ namespace eosio { namespace chain {
       EOS_ASSERT( auth.actor == link.account, irrelevant_auth_exception,
                   "the owner of the linked permission needs to be the actor of the declared authorization" );
 
-      EOS_ASSERT( link.type != updateauth::get_name(),  action_validate_exception,
-                  "Cannot link eosio::updateauth to a minimum permission" );
-      EOS_ASSERT( link.type != deleteauth::get_name(),  action_validate_exception,
-                  "Cannot link eosio::deleteauth to a minimum permission" );
-      EOS_ASSERT( link.type != linkauth::get_name(),    action_validate_exception,
-                  "Cannot link eosio::linkauth to a minimum permission" );
-      EOS_ASSERT( link.type != unlinkauth::get_name(),  action_validate_exception,
-                  "Cannot link eosio::unlinkauth to a minimum permission" );
-      EOS_ASSERT( link.type != canceldelay::get_name(), action_validate_exception,
-                  "Cannot link eosio::canceldelay to a minimum permission" );
+      if( link.code == config::system_account_name
+            || !_control.is_builtin_activated( builtin_protocol_feature_t::fix_linkauth_restriction ) ) 
+      {
+         EOS_ASSERT( link.type != updateauth::get_name(),  action_validate_exception,
+                     "Cannot link eosio::updateauth to a minimum permission" );
+         EOS_ASSERT( link.type != deleteauth::get_name(),  action_validate_exception,
+                     "Cannot link eosio::deleteauth to a minimum permission" );
+         EOS_ASSERT( link.type != linkauth::get_name(),    action_validate_exception,
+                     "Cannot link eosio::linkauth to a minimum permission" );
+         EOS_ASSERT( link.type != unlinkauth::get_name(),  action_validate_exception,
+                     "Cannot link eosio::unlinkauth to a minimum permission" );
+         EOS_ASSERT( link.type != canceldelay::get_name(), action_validate_exception,
+                     "Cannot link eosio::canceldelay to a minimum permission" );
+      }
 
       const auto linked_permission_name = lookup_minimum_permission(link.account, link.code, link.type);
 
@@ -326,7 +443,8 @@ namespace eosio { namespace chain {
                                                const flat_set<permission_level>&    provided_permissions,
                                                fc::microseconds                     provided_delay,
                                                const std::function<void()>&         _checktime,
-                                               bool                                 allow_unused_keys
+                                               bool                                 allow_unused_keys,
+                                               const flat_set<permission_level>&    satisfied_authorizations
                                              )const
    {
       const auto& checktime = ( static_cast<bool>(_checktime) ? _checktime : _noop_checktime );
@@ -383,9 +501,11 @@ namespace eosio { namespace chain {
                }
             }
 
-            auto res = permissions_to_satisfy.emplace( declared_auth, delay );
-            if( !res.second && res.first->second > delay) { // if the declared_auth was already in the map and with a higher delay
-               res.first->second = delay;
+            if( satisfied_authorizations.find( declared_auth ) == satisfied_authorizations.end() ) {
+               auto res = permissions_to_satisfy.emplace( declared_auth, delay );
+               if( !res.second && res.first->second > delay) { // if the declared_auth was already in the map and with a higher delay
+                  res.first->second = delay;
+               }
             }
          }
       }
@@ -402,7 +522,8 @@ namespace eosio { namespace chain {
          EOS_ASSERT( checker.satisfied( p.first, p.second ), unsatisfied_authorization,
                      "transaction declares authority '${auth}', "
                      "but does not have signatures for it under a provided delay of ${provided_delay} ms, "
-                     "provided permissions ${provided_permissions}, and provided keys ${provided_keys}",
+                     "provided permissions ${provided_permissions}, provided keys ${provided_keys}, "
+                     "and a delay max limit of ${delay_max_limit_ms} ms",
                      ("auth", p.first)
                      ("provided_delay", provided_delay.count()/1000)
                      ("provided_permissions", provided_permissions)
@@ -443,7 +564,8 @@ namespace eosio { namespace chain {
 
       EOS_ASSERT( checker.satisfied({account, permission}), unsatisfied_authorization,
                   "permission '${auth}' was not satisfied under a provided delay of ${provided_delay} ms, "
-                  "provided permissions ${provided_permissions}, and provided keys ${provided_keys}",
+                  "provided permissions ${provided_permissions}, provided keys ${provided_keys}, "
+                  "and a delay max limit of ${delay_max_limit_ms} ms",
                   ("auth", permission_level{account, permission})
                   ("provided_delay", provided_delay.count()/1000)
                   ("provided_permissions", provided_permissions)

@@ -48,10 +48,11 @@ else()
 endif()
 
 target_link_libraries( ${NODE_EXECUTABLE_NAME}
-        PRIVATE appbase
+        PRIVATE appbase version
         PRIVATE -Wl,${whole_archive_flag} login_plugin               -Wl,${no_whole_archive_flag}
         PRIVATE -Wl,${whole_archive_flag} history_plugin             -Wl,${no_whole_archive_flag}
-        PRIVATE -Wl,${whole_archive_flag} bnet_plugin             -Wl,${no_whole_archive_flag}
+        PRIVATE -Wl,${whole_archive_flag} state_history_plugin       -Wl,${no_whole_archive_flag}
+        PRIVATE -Wl,${whole_archive_flag} trace_api_plugin           -Wl,${no_whole_archive_flag}
         PRIVATE -Wl,${whole_archive_flag} history_api_plugin         -Wl,${no_whole_archive_flag}
         PRIVATE -Wl,${whole_archive_flag} chain_api_plugin           -Wl,${no_whole_archive_flag}
         PRIVATE -Wl,${whole_archive_flag} net_plugin                 -Wl,${no_whole_archive_flag}
@@ -60,6 +61,8 @@ target_link_libraries( ${NODE_EXECUTABLE_NAME}
         PRIVATE -Wl,${whole_archive_flag} txn_test_gen_plugin        -Wl,${no_whole_archive_flag}
         PRIVATE -Wl,${whole_archive_flag} db_size_api_plugin         -Wl,${no_whole_archive_flag}
         PRIVATE -Wl,${whole_archive_flag} producer_api_plugin        -Wl,${no_whole_archive_flag}
+        PRIVATE -Wl,${whole_archive_flag} test_control_plugin        -Wl,${no_whole_archive_flag}
+        PRIVATE -Wl,${whole_archive_flag} test_control_api_plugin    -Wl,${no_whole_archive_flag}
         PRIVATE -Wl,${build_id_flag}
         PRIVATE chain_plugin http_plugin producer_plugin http_client_plugin
         PRIVATE eosio_chain fc ${CMAKE_DL_LIBS} ${PLATFORM_SPECIFIC_LIBS} )
@@ -70,12 +73,9 @@ endif()
 
 include(additionalPlugins)
 
+copy_bin( ${NODE_EXECUTABLE_NAME} )
 install( TARGETS
-   ${NODE_EXECUTABLE_NAME}
-
-   RUNTIME DESTINATION ${CMAKE_INSTALL_FULL_BINDIR}
-   LIBRARY DESTINATION ${CMAKE_INSTALL_FULL_LIBDIR}
-   ARCHIVE DESTINATION ${CMAKE_INSTALL_FULL_LIBDIR}
+   ${NODE_EXECUTABLE_NAME} RUNTIME DESTINATION ${CMAKE_INSTALL_FULL_BINDIR} COMPONENT base
 )
 install(DIRECTORY DESTINATION ${CMAKE_INSTALL_FULL_LOCALSTATEDIR}/log/eosio
         DIRECTORY_PERMISSIONS OWNER_READ
